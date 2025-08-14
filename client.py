@@ -6,7 +6,7 @@ import os
 # --- Configuration ---
 # Replace with the IP address or URL of the machine running your FastAPI server
 API_URL = "http://<YOUR_SERVER_IP_ADDRESS>:8000/process-frame/" 
-API_KEY = "YOUR_SUPER_SECRET_API_KEY"  # Must match the key in main.py
+API_KEY = "rPi-b0tt1e-sCAn-9zX7-qW3e"  # Must match the key in main.py
 FRAME_INTERVAL = 2  # Time in seconds between sending frames
 
 # --- Main Program ---
