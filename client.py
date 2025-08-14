@@ -5,7 +5,7 @@ import os
 
 # --- Configuration ---
 # Replace with the IP address or URL of the machine running your FastAPI server
-API_URL = "http://<YOUR_SERVER_IP_ADDRESS>:8000/process-frame/" 
+API_URL = "https://recycle-counter-api-1.onrender.com/process-frame/" 
 API_KEY = "rPi-b0tt1e-sCAn-9zX7-qW3e"  # Must match the key in main.py
 FRAME_INTERVAL = 2  # Time in seconds between sending frames
 
