@@ -9,26 +9,26 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 from PIL import Image
 from collections import Counter
+from ultralytics import YOLO
+import base64
+import numpy as np
+import cv2
 
 # --- Configuration & Initialization ---
 
 # 1. API Key Setup for Security
-API_KEY = os.getenv("API_KEY", "default-fallback-key-for-local-dev") # Reads from environment
-API_KEY_NAME = "X-API-KEY"
+API_KEY = os.getenv("API_KEY", "default-fallback-key-for-local-dev")
+API_KEY_NAME = "X-API-KEY"  # <-- CORRECTED: This should be the name of the header
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
 # 2. Firebase/Firestore Initialization
 try:
-    # Get the base64 encoded credentials from the environment variable
     creds_base64 = os.getenv("GOOGLE_CREDENTIALS_JSON_BASE64")
     if creds_base64:
-        # Decode the base64 string to a JSON string
         creds_json_str = base64.b64decode(creds_base64).decode("utf-8")
-        # Load the JSON string into a dictionary
         creds_dict = json.loads(creds_json_str)
         cred = credentials.Certificate(creds_dict)
     else:
-        # Fallback for local development if the environment variable isn't set
         cred = credentials.Certificate("serviceAccountKey.json")
     
     firebase_admin.initialize_app(cred)
@@ -41,19 +41,15 @@ except Exception as e:
 # 3. Initialize FastAPI App
 app = FastAPI(title="Bottle Detection API")
 
-# 4. Load Your YOLOv5 Model (best.pt)
+# 4. Load Your YOLOv8 Model
 try:
-    # Use torch.hub.load to get the YOLOv5 model structure
-    # 'ultralytics/yolov5' is the source repo, 'custom' specifies you're using your own weights
-    model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', force_reload=True)
-    print("✅ YOLOv5 model loaded successfully.")
+    model = YOLO('best.pt')
+    print("✅ YOLOv8 model loaded successfully.")
 except Exception as e:
     print(f"🔥 Model loading failed: {e}")
     model = None
 
 # --- Helper Functions ---
-
-# Function to secure the endpoint with an API key
 async def get_api_key(api_key: str = Security(api_key_header)):
     if api_key == API_KEY:
         return api_key
@@ -61,7 +57,6 @@ async def get_api_key(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Could not validate credentials")
 
 # --- API Endpoint ---
-
 @app.post("/process-frame/", dependencies=[Security(get_api_key)])
 async def process_image_frame(file: UploadFile = File(...)):
     """
@@ -74,46 +69,67 @@ async def process_image_frame(file: UploadFile = File(...)):
 
     # 1. Read and decode the uploaded image
     contents = await file.read()
-    image = Image.open(io.BytesIO(contents)).convert("RGB")
+    try:
+        np_image = np.frombuffer(contents, np.uint8)
+        image = cv2.imdecode(np_image, cv2.IMREAD_COLOR)
+        if image is None:
+             raise ValueError("Could not decode image.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image format: {e}")
 
     # 2. Perform inference with the model
-    results = model(image)
+    results = model(image, verbose=False)
 
     # 3. Process the results
-    # results.pandas().xyxy[0] gives a dataframe of detections
-    detections = results.pandas().xyxy[0]
-    detected_brands = [row['name'] for index, row in detections.iterrows()]
+    detected_brands = []
+    
+    for r in results:
+        if r.boxes.data.shape[0] > 0:
+            for box in r.boxes.data:
+                class_id = int(box[5].item())
+                confidence = float(box[4].item())
+                
+                if confidence >= 0.25:
+                    brand_name = r.names[class_id]
+                    detected_brands.append(brand_name)
     
     if not detected_brands:
         return {"status": "success", "message": "No bottles detected in the frame."}
 
-    # Count occurrences of each brand
     brand_counts = Counter(detected_brands)
 
     # 4. Update Firestore database
-    # Use a transaction to safely increment counts
-    transaction = db.transaction()
-    for brand, count in brand_counts.items():
-        doc_ref = db.collection("bottle_counts").document(brand)
+    if db:
+        transaction = db.transaction()
         
-        # This function will be run atomically by the transaction
         @firestore.transactional
-        def update_in_transaction(trans, doc_ref, num_to_add):
+        def update_in_transaction(trans):
+            doc_ref = db.collection("bottle_counts").document("live_counts")
             snapshot = doc_ref.get(transaction=trans)
+            
             if snapshot.exists:
-                current_count = snapshot.to_dict().get("count", 0)
-                trans.update(doc_ref, {"count": current_count + num_to_add})
+                current_brands = snapshot.to_dict().get('brands', {})
             else:
-                trans.set(doc_ref, {"count": num_to_add})
-        
-        update_in_transaction(transaction, doc_ref, count)
-    
-    print(f"✅ Processed frame. Detected: {dict(brand_counts)}")
+                current_brands = {}
+
+            for brand, count in brand_counts.items():
+                current_brands[brand] = current_brands.get(brand, 0) + count
+
+            trans.set(doc_ref, {
+                'timestamp': firestore.SERVER_TIMESTAMP,
+                'total_bottles': sum(current_brands.values()),
+                'brands': current_brands
+            })
+            
+        try:
+            update_in_transaction(transaction)
+            print(f"✅ Processed frame. Detected: {dict(brand_counts)}. Firestore updated.")
+        except Exception as e:
+            print(f"🔥 Firestore update failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Firestore update failed: {e}")
 
     return {
         "status": "success",
-        "detected_brands": dict(brand_counts)
+        "detected_brands": dict(brand_counts),
+        "message": "Frame processed and counts updated in Firestore."
     }
-
-# --- To Run the API ---
-# In your terminal, run: uvicorn main:app --host 0.0.0.0 --port 8000

@@ -2,24 +2,32 @@ import cv2
 import requests
 import time
 import os
+import io
 
 # --- Configuration ---
-# Replace with the IP address or URL of the machine running your FastAPI server
-API_URL = "https://recycle-counter-api-1.onrender.com/process-frame/" 
-API_KEY = "rPi-b0tt1e-sCAn-9zX7-qW3e"  # Must match the key in main.py
-FRAME_INTERVAL = 2  # Time in seconds between sending frames
+# You must update this with your deployed server's public URL
+API_ENDPOINT = "https://recycle-counter-api-1.onrender.com/process-frame/"
+# This key must match the API_KEY environment variable on your server
+API_KEY = "rPi-b0tt1e-sCAn-9zX7-qW3e"
+FRAME_INTERVAL = 2
+
+# --- New Configuration for FPS ---
+DESIRED_FPS = 3  # Set your desired frames per second
 
 # --- Main Program ---
 headers = {
-    "X-API-KEY": API_KEY
+    "X-API-KEY": API_KEY  # This header name must match API_KEY_NAME in main.py
 }
 
 # Initialize the camera
-cap = cv2.VideoCapture(0) # 0 is the default camera
+cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
     print("🔥 Error: Could not open camera.")
     exit()
+
+# --- Set the desired FPS ---
+cap.set(cv2.CAP_PROP_FPS, DESIRED_FPS)
 
 print("✅ Camera started. Will send a frame every {} seconds.".format(FRAME_INTERVAL))
 
@@ -46,8 +54,8 @@ try:
 
         # 4. Send the frame to the API
         try:
-            response = requests.post(API_URL, headers=headers, files=files, timeout=10)
-            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+            response = requests.post(API_ENDPOINT, headers=headers, files=files, timeout=10)
+            response.raise_for_status()
             
             print(f"✅ Frame sent successfully. Response: {response.json()}")
 
